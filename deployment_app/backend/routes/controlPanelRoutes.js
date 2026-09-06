@@ -1,5 +1,5 @@
 import express from 'express'
-import { deployController } from '../controllers/controlpanelController.js'
+import { deployController } from '../controllers/controlpanelController.js  '
 
 
 const controlPanelRouter = express.Router()
