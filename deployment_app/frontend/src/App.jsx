@@ -1,52 +1,108 @@
 import { useState } from 'react';
 import './App.css';
+import TerminalOutput from './components/TerminalOutput/TerminalOutput';
 
+/**
+ * Main Application Component
+ * Provides a UI to trigger backend deployments and visualize real-time logs.
+ */
 function App() {
+  // Form state
   const [gitUrl, setGitUrl] = useState('');
   const [backendDir, setBackendDir] = useState('');
+  
+  // UI state for loading indicators
   const [isLoading, setIsLoading] = useState(false);
+  
+  // State for the final deployment response (success/error details)
   const [response, setResponse] = useState(null);
+  
+  // State to accumulate real-time logs from the server
+  const [logs, setLogs] = useState([]);
 
-  const handleDeploy = async (e) => {
+  /**
+   * Handles the form submission to trigger a new deployment.
+   * Connects to the backend via Server-Sent Events (SSE) to receive live logs.
+   */
+  const handleDeploy = (e) => {
     e.preventDefault();
     if (!gitUrl) return;
 
+    // Reset UI state for a new deployment
     setIsLoading(true);
     setResponse(null);
+    setLogs([]);
 
-    try {
-      const res = await fetch('http://localhost:4000/api/controlpanel/deploy', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json', 
-        },
-        body: JSON.stringify({ gitUrl, backendDir }),
-      });
+    // Construct query parameters for the SSE request
+    const queryParams = new URLSearchParams({
+      gitUrl: gitUrl,
+      backendDir: backendDir
+    }).toString();
 
-      const data = await res.json();
-      setResponse({ status: res.status, data });
-    } catch (error) {
-      setResponse({
-        status: 500,
-        data: {
-          success: false,
-          message: 'Failed to connect to the server',
-          error: error.message,
-        },
-      });
-    } finally {
+    // Establish an SSE connection using the native EventSource API
+    // Note: The backend must support GET requests for this endpoint
+    const eventSource = new EventSource(`http://localhost:4000/api/controlpanel/deploy?${queryParams}`);
+
+    // Listen for incoming messages from the server
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data); // convert the string data back to an object
+        
+        // Append the new log to the existing logs array
+        setLogs((prevLogs) => [...prevLogs, data]);
+
+        // Check if this is the final message indicating success or failure
+        if (data.type === 'success' || (data.type === 'error' && data.success === false)) {
+          // Update the final response state to display the summary box
+          setResponse({
+            status: data.success ? 200 : 500,
+            data: data
+          });
+          setIsLoading(false);
+          
+          // If the deployment failed, close the connection immediately.
+          // (On success, we keep it open in case the server continues sending background logs)
+          if (data.type === 'error') {
+            eventSource.close();
+          }
+        }
+      } catch (err) {
+        console.error("Failed to parse SSE data", err);
+      }
+    };
+
+    // Handle connection errors or unexpected disconnects
+    eventSource.onerror = (error) => {
+      console.error("EventSource failed:", error);
+      eventSource.close();
       setIsLoading(false);
-    }
+      
+      // If we haven't received a final response yet, set a generic error message
+      setResponse((prev) => {
+        if (!prev) {
+          return {
+            status: 500,
+            data: {
+              success: false,
+              message: 'Connection lost or failed to connect to the server',
+            }
+          };
+        }
+        return prev;
+      });
+    };
   };
 
   return (
     <div className="app-container">
-      <div className="header">
-        <h1>Deploy App</h1>
-        <p>Instantly clone and build your Node.js applications</p>
-      </div>
+      <div className="left-panel">
+        <div className="header">
+          <h1>Deploy App</h1>
+          <p>Instantly clone and build your Node.js applications</p>
+        </div>
 
-      <form className="deploy-form" onSubmit={handleDeploy}>
+        {/* Deployment Configuration Form */}
+        <form className="deploy-form" onSubmit={handleDeploy}>
         <div className="form-group">
           <label htmlFor="gitUrl">GitHub Repository URL *</label>
           <input
@@ -83,16 +139,26 @@ function App() {
           )}
         </button>
       </form>
+      </div>
 
+      <div className="right-panel">
+        {/* Real-time Terminal Output Console */}
+        {(logs.length > 0 || isLoading) && (
+          <TerminalOutput logs={logs} />
+        )}
+
+      {/* Final Deployment Summary Box */}
       {response && (
         <div className={`response-box ${response.data.success ? 'success' : 'error'}`}>
           <div className="response-header">
             <div className="status-icon">
               {response.data.success ? (
+                // Checkmark icon for success
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                   <polyline points="20 6 9 17 4 12"></polyline>
                 </svg>
               ) : (
+                // X icon for failure
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
                   <line x1="18" y1="6" x2="6" y2="18"></line>
                   <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -115,13 +181,6 @@ function App() {
               </div>
             )}
             
-            {response.data.buildMessage && (
-              <div className="detail-item">
-                <span className="detail-label">Build Output:</span>
-                <span className="detail-value">{response.data.buildMessage}</span>
-              </div>
-            )}
-            
             {response.data.error && (
               <div className="detail-item">
                 <span className="detail-label">Error Details:</span>
@@ -131,6 +190,7 @@ function App() {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }
